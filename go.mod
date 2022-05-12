@@ -4,6 +4,11 @@ go 1.16
 
 require (
 	github.com/AlecAivazis/survey/v2 v2.3.4
+	github.com/Azure/azure-sdk-for-go v63.4.0+incompatible // indirect
+	github.com/Azure/go-autorest/autorest v0.11.24
+	github.com/Azure/go-autorest/autorest/azure/auth v0.5.7
+	github.com/Azure/go-autorest/autorest/to v0.4.0 // indirect
+	github.com/Azure/go-autorest/autorest/validation v0.3.1 // indirect
 	github.com/coreos/go-semver v0.3.0
 	github.com/go-logr/logr v0.4.0
 	github.com/gophercloud/utils v0.0.0-20210909165623-d7085207ff6d
