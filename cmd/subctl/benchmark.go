@@ -111,7 +111,7 @@ func checkBenchmarkArguments(args []string, intraCluster bool) error {
 	return nil
 }
 
-func setUpTestFramework(args []string, restConfigProducer restconfig.Producer) error {
+func setUpTestFramework(args []string, restConfigProducer *restconfig.Producer) error {
 	if len(args) > 0 {
 		err := restconfig.ConfigureTestFramework(args)
 		if err != nil {

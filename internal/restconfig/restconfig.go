@@ -26,12 +26,16 @@ import (
 	"github.com/coreos/go-semver/semver"
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+	"github.com/submariner-io/admiral/pkg/reporter"
 	"github.com/submariner-io/admiral/pkg/resource"
 	"github.com/submariner-io/admiral/pkg/stringset"
 	"github.com/submariner-io/shipyard/test/e2e/framework"
+	"github.com/submariner-io/subctl/internal/cli"
 	"github.com/submariner-io/subctl/internal/constants"
 	"github.com/submariner-io/subctl/internal/exit"
 	"github.com/submariner-io/subctl/internal/gvr"
+	"github.com/submariner-io/subctl/pkg/cluster"
 	"github.com/submariner-io/subctl/pkg/version"
 	"github.com/submariner-io/submariner-operator/api/v1alpha1"
 	"github.com/submariner-io/submariner-operator/pkg/names"
@@ -52,22 +56,108 @@ type RestConfig struct {
 	ClusterName string
 }
 
+type configAndOverrides struct {
+	config    clientcmd.ClientConfig
+	overrides *clientcmd.ConfigOverrides
+}
+
 type Producer struct {
-	kubeConfig   string
-	kubeContext  string
-	kubeContexts []string
-	inCluster    bool
+	kubeConfig          string
+	kubeContext         string
+	kubeContexts        []string
+	defaultClientConfig *configAndOverrides
+	inCluster           bool
+	namespaceFlag       bool
 }
 
-func NewProducer() Producer {
-	return Producer{}
+func NewProducer() *Producer {
+	return &Producer{}
 }
 
-func NewProducerFrom(kubeConfig, kubeContext string) Producer {
-	return Producer{
+func NewProducerFrom(kubeConfig, kubeContext string) *Producer {
+	return &Producer{
 		kubeConfig:  kubeConfig,
 		kubeContext: kubeContext,
 	}
+}
+
+func (rcp *Producer) WithNamespace() *Producer {
+	rcp.namespaceFlag = true
+
+	return rcp
+}
+
+func (rcp *Producer) SetupFlags(flags *pflag.FlagSet) {
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	loadingRules.DefaultClientConfig = &clientcmd.DefaultClientConfig
+
+	flags.StringVar(&loadingRules.ExplicitPath, "kubeconfig", "", "absolute path(s) to the kubeconfig file(s)")
+
+	// Default un-prefixed context
+	overrides := clientcmd.ConfigOverrides{ClusterDefaults: clientcmd.ClusterDefaults}
+	kflags := clientcmd.RecommendedConfigOverrideFlags("")
+	clientcmd.BindOverrideFlags(&overrides, flags, kflags)
+
+	// Support deprecated --kubecontext; TODO remove in 0.15
+	legacyFlags := clientcmd.RecommendedConfigOverrideFlags("kube")
+	legacyFlags.CurrentContext.BindStringFlag(flags, &overrides.CurrentContext)
+	_ = flags.MarkDeprecated("kubecontext", "use --context instead")
+
+	if !rcp.namespaceFlag {
+		_ = flags.MarkHidden("namespace")
+	}
+
+	rcp.defaultClientConfig = &configAndOverrides{
+		config:    clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, &overrides),
+		overrides: &overrides,
+	}
+}
+
+type PerContextFn func(clusterInfo *cluster.Info, namespace string) error
+
+// Runs the given function on the selected context.
+// The status reporter is only used for errors specific to this function;
+// the per-context function is expected to perform its own status reporting.
+func (rcp *Producer) RunOnSelectedContext(function PerContextFn, status reporter.Interface) error {
+	if rcp.inCluster {
+		restConfig, err := rest.InClusterConfig()
+		if err != nil {
+			return status.Error(err, "error retrieving the in-cluster configuration")
+		}
+
+		// In-cluster configurations don't give a cluster name, use "in-cluster"
+		clusterInfo, err := cluster.NewInfo("in-cluster", restConfig)
+		if err != nil {
+			return status.Error(err, "error building the cluster.Info for the in-cluster configuration")
+		}
+
+		// In-cluster configurations don't specify a namespace, use the default
+		// When using the in-cluster configuration, that's the only configuration we want
+		return function(clusterInfo, "default")
+	}
+
+	if rcp.defaultClientConfig != nil {
+		restConfig, err := getRestConfigFromConfig(rcp.defaultClientConfig.config, rcp.defaultClientConfig.overrides)
+		if err != nil {
+			return status.Error(err, "error retrieving the default configuration")
+		}
+
+		clusterInfo, err := cluster.NewInfo(restConfig.ClusterName, restConfig.Config)
+		if err != nil {
+			return status.Error(err, "error building the cluster.Info for the default configuration")
+		}
+
+		namespace, _, err := rcp.defaultClientConfig.config.Namespace()
+		if err != nil {
+			return status.Error(err, "error retrieving the namespace for the default configuration")
+		}
+
+		if err := function(clusterInfo, namespace); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func (rcp *Producer) AddKubeConfigFlag(cmd *cobra.Command) {
@@ -231,6 +321,10 @@ func ForBroker(submariner *v1alpha1.Submariner, serviceDisc *v1alpha1.ServiceDis
 func clientConfigAndClusterName(rules *clientcmd.ClientConfigLoadingRules, overrides *clientcmd.ConfigOverrides) (RestConfig, error) {
 	config := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides)
 
+	return getRestConfigFromConfig(config, overrides)
+}
+
+func getRestConfigFromConfig(config clientcmd.ClientConfig, overrides *clientcmd.ConfigOverrides) (RestConfig, error) {
 	clientConfig, err := config.ClientConfig()
 	if err != nil {
 		return RestConfig{}, errors.Wrap(err, "error creating client config")
@@ -316,36 +410,34 @@ func (rcp *Producer) ClientConfig() clientcmd.ClientConfig {
 }
 
 func (rcp *Producer) CheckVersionMismatch(cmd *cobra.Command, args []string) error {
-	config, err := rcp.ForCluster()
-	exit.OnErrorWithMessage(err, "The provided kubeconfig is invalid")
+	return rcp.RunOnSelectedContext(func(clusterInfo *cluster.Info, namespace string) error {
+		crClient := clusterInfo.ClientProducer.ForGeneral()
 
-	client, err := controllerClient.New(config.Config, controllerClient.Options{})
-	exit.OnErrorWithMessage(err, "Error creating client")
+		submariner := &v1alpha1.Submariner{}
+		err := crClient.Get(context.TODO(), controllerClient.ObjectKey{
+			Namespace: constants.OperatorNamespace,
+			Name:      names.SubmarinerCrName,
+		}, submariner)
 
-	submariner := &v1alpha1.Submariner{}
-	err = client.Get(context.TODO(), controllerClient.ObjectKey{
-		Namespace: constants.OperatorNamespace,
-		Name:      names.SubmarinerCrName,
-	}, submariner)
-
-	if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
-		return nil
-	}
-
-	exit.OnErrorWithMessage(err, fmt.Sprintf("Error retrieving Submariner object %s", names.SubmarinerCrName))
-
-	if submariner != nil && submariner.Spec.Version != "" {
-		subctlVer, _ := semver.NewVersion(version.Version)
-		submarinerVer, _ := semver.NewVersion(submariner.Spec.Version)
-
-		if subctlVer != nil && submarinerVer != nil && subctlVer.LessThan(*submarinerVer) {
-			return fmt.Errorf(
-				"the subctl version %q is older than the deployed Submariner version %q. Please upgrade your subctl version",
-				version.Version, submariner.Spec.Version)
+		if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+			return nil
 		}
-	}
 
-	return nil
+		exit.OnErrorWithMessage(err, fmt.Sprintf("Error retrieving Submariner object %s", names.SubmarinerCrName))
+
+		if submariner != nil && submariner.Spec.Version != "" {
+			subctlVer, _ := semver.NewVersion(version.Version)
+			submarinerVer, _ := semver.NewVersion(submariner.Spec.Version)
+
+			if subctlVer != nil && submarinerVer != nil && subctlVer.LessThan(*submarinerVer) {
+				return fmt.Errorf(
+					"the subctl version %q is older than the deployed Submariner version %q. Please upgrade your subctl version",
+					version.Version, submariner.Spec.Version)
+			}
+		}
+
+		return nil
+	}, cli.NewReporter())
 }
 
 func ConfigureTestFramework(args []string) error {
