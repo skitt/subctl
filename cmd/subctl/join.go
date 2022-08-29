@@ -58,34 +58,31 @@ var joinCmd = &cobra.Command{
 		exit.OnError(status.Error(err, "Error loading the broker information from the given file"))
 		status.Success("%s indicates broker is at %s", args[0], brokerInfo.BrokerURL)
 
-		determineClusterID(status)
+		exit.OnError(joinRestConfigProducer.RunOnSelectedContext(
+			func(clusterInfo *cluster.Info, namespace string, status reporter.Interface) error {
+				determineClusterID(clusterInfo.Name, status)
 
-		clientConfig, err := joinRestConfigProducer.ForCluster()
-		exit.OnError(status.Error(err, "Error creating the REST config"))
+				networkDetails := getNetworkDetails(clusterInfo.ClientProducer, status)
+				determinePodCIDR(networkDetails, status)
+				determineServiceCIDR(networkDetails, status)
 
-		clientProducer, err := client.NewProducerFromRestConfig(clientConfig.Config)
-		exit.OnError(status.Error(err, "Error creating the client producer"))
+				if brokerInfo.IsConnectivityEnabled() && labelGateway {
+					possiblyLabelGateway(clusterInfo.ClientProducer.ForKubernetes(), status)
+				}
 
-		networkDetails := getNetworkDetails(clientProducer, status)
-		determinePodCIDR(networkDetails, status)
-		determineServiceCIDR(networkDetails, status)
+				if joinFlags.CustomDomains == nil && brokerInfo.CustomDomains != nil {
+					joinFlags.CustomDomains = *brokerInfo.CustomDomains
+				}
 
-		if brokerInfo.IsConnectivityEnabled() && labelGateway {
-			possiblyLabelGateway(clientProducer.ForKubernetes(), status)
-		}
-
-		if joinFlags.CustomDomains == nil && brokerInfo.CustomDomains != nil {
-			joinFlags.CustomDomains = *brokerInfo.CustomDomains
-		}
-
-		err = join.ClusterToBroker(brokerInfo, &joinFlags, clientProducer, status)
-		exit.OnError(err)
+				return join.ClusterToBroker( // nolint:wrapcheck // No need to wrap errors here.
+					brokerInfo, &joinFlags, clusterInfo.ClientProducer, status)
+			}, status))
 	},
 }
 
 func init() {
 	addJoinFlags(joinCmd)
-	joinRestConfigProducer.AddKubeContextFlag(joinCmd)
+	joinRestConfigProducer.SetupFlags(joinCmd.Flags())
 	rootCmd.AddCommand(joinCmd)
 }
 
@@ -259,12 +256,11 @@ func askForCIDR(name string) (string, error) {
 	return strings.TrimSpace(answers.Cidr), nil
 }
 
-func determineClusterID(status reporter.Interface) {
+func determineClusterID(clusterName string, status reporter.Interface) {
 	var err error
 
 	if joinFlags.ClusterID == "" {
-		joinFlags.ClusterID, err = joinRestConfigProducer.GetClusterID()
-		exit.OnError(status.Error(err, "Error determining cluster ID of the target cluster"))
+		joinFlags.ClusterID = clusterName
 
 		if err = cluster.IsValidID(joinFlags.ClusterID); err != nil {
 			joinFlags.ClusterID = cluster.SanitizeID(joinFlags.ClusterID)
