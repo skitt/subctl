@@ -30,6 +30,7 @@ import (
 	"github.com/submariner-io/subctl/pkg/cloud/cleanup"
 	"github.com/submariner-io/subctl/pkg/cloud/gcp"
 	"github.com/submariner-io/subctl/pkg/cloud/prepare"
+	"github.com/submariner-io/subctl/pkg/cluster"
 )
 
 var (
@@ -43,8 +44,12 @@ var (
 		Long:    "This command prepares an OpenShift installer-provisioned infrastructure (IPI) on GCP cloud for Submariner installation.",
 		PreRunE: checkGCPFlags,
 		Run: func(cmd *cobra.Command, args []string) {
-			err := prepare.GCP(gcpRestConfigProducer, &cloudPorts, &gcpConfig, cli.NewReporter())
-			exit.OnError(err)
+			status := cli.NewReporter()
+
+			exit.OnError(gcpRestConfigProducer.RunOnSelectedContext(
+				func(clusterInfo *cluster.Info, namespace string) error {
+					return prepare.GCP(clusterInfo, &cloudPorts, &gcpConfig, status) // nolint:wrapcheck // No need to wrap errors here.
+				}, status))
 		},
 	}
 
@@ -54,15 +59,19 @@ var (
 		Long:    "This command cleans up an installer-provisioned infrastructure (IPI) on GCP-based cloud after Submariner uninstallation.",
 		PreRunE: checkGCPFlags,
 		Run: func(cmd *cobra.Command, args []string) {
-			err := cleanup.GCP(gcpRestConfigProducer, &gcpConfig, cli.NewReporter())
-			exit.OnError(err)
+			status := cli.NewReporter()
+
+			exit.OnError(gcpRestConfigProducer.RunOnSelectedContext(
+				func(clusterInfo *cluster.Info, namespace string) error {
+					return cleanup.GCP(clusterInfo, &gcpConfig, status) // nolint:wrapcheck // No need to wrap errors here.
+				}, status))
 		},
 	}
 )
 
 func init() {
 	addGCPGeneralFlags := func(command *cobra.Command) {
-		gcpRestConfigProducer.AddKubeContextFlag(command)
+		gcpRestConfigProducer.SetupFlags(command.Flags())
 		command.Flags().StringVar(&gcpConfig.InfraID, infraIDFlag, "", "GCP infra ID")
 		command.Flags().StringVar(&gcpConfig.Region, regionFlag, "", "GCP region")
 		command.Flags().StringVar(&gcpConfig.ProjectID, projectIDFlag, "", "GCP project ID")

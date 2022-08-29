@@ -16,6 +16,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// nolint:dupl // Similar code in aws.go, azure.go, rhos.go, but not duplicate
 package subctl
 
 import (
@@ -27,6 +28,7 @@ import (
 	cloudaws "github.com/submariner-io/subctl/pkg/cloud/aws"
 	"github.com/submariner-io/subctl/pkg/cloud/cleanup"
 	"github.com/submariner-io/subctl/pkg/cloud/prepare"
+	"github.com/submariner-io/subctl/pkg/cluster"
 )
 
 var (
@@ -40,8 +42,12 @@ var (
 		Long:    "This command prepares an OpenShift installer-provisioned infrastructure (IPI) on AWS cloud for Submariner installation.",
 		PreRunE: checkAWSFlags,
 		Run: func(cmd *cobra.Command, args []string) {
-			err := prepare.AWS(awsRestConfigProducer, &cloudPorts, &awsConfig, cli.NewReporter())
-			exit.OnError(err)
+			status := cli.NewReporter()
+
+			exit.OnError(awsRestConfigProducer.RunOnSelectedContext(
+				func(clusterInfo *cluster.Info, namespace string) error {
+					return prepare.AWS(clusterInfo, &cloudPorts, &awsConfig, status) // nolint:wrapcheck // No need to wrap errors here.
+				}, status))
 		},
 	}
 
@@ -52,15 +58,19 @@ var (
 			" cloud after Submariner uninstallation.",
 		PreRunE: checkAWSFlags,
 		Run: func(cmd *cobra.Command, args []string) {
-			err := cleanup.AWS(awsRestConfigProducer, &awsConfig, cli.NewReporter())
-			exit.OnError(err)
+			status := cli.NewReporter()
+
+			exit.OnError(awsRestConfigProducer.RunOnSelectedContext(
+				func(clusterInfo *cluster.Info, namespace string) error {
+					return cleanup.AWS(clusterInfo, &awsConfig, status) // nolint:wrapcheck // No need to wrap errors here.
+				}, status))
 		},
 	}
 )
 
 func init() {
 	addGeneralAWSFlags := func(command *cobra.Command) {
-		awsRestConfigProducer.AddKubeContextFlag(command)
+		awsRestConfigProducer.SetupFlags(command.Flags())
 		command.Flags().StringVar(&awsConfig.InfraID, infraIDFlag, "", "AWS infra ID")
 		command.Flags().StringVar(&awsConfig.Region, regionFlag, "", "AWS region")
 		command.Flags().StringVar(&awsConfig.OcpMetadataFile, "ocp-metadata", "",
