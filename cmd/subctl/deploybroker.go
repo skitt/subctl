@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/submariner-io/admiral/pkg/reporter"
 	"github.com/submariner-io/admiral/pkg/stringset"
 	"github.com/submariner-io/subctl/internal/cli"
 	"github.com/submariner-io/subctl/internal/component"
@@ -30,7 +31,7 @@ import (
 	"github.com/submariner-io/subctl/internal/exit"
 	"github.com/submariner-io/subctl/internal/restconfig"
 	"github.com/submariner-io/subctl/pkg/broker"
-	"github.com/submariner-io/subctl/pkg/client"
+	"github.com/submariner-io/subctl/pkg/cluster"
 	"github.com/submariner-io/subctl/pkg/deploy"
 	"github.com/submariner-io/submariner-operator/pkg/discovery/globalnet"
 )
@@ -48,26 +49,22 @@ var deployBroker = &cobra.Command{
 	Use:   "deploy-broker",
 	Short: "Deploys the broker",
 	Run: func(cmd *cobra.Command, args []string) {
-		status := cli.NewReporter()
+		exit.OnError(deployRestConfigProducer.RunOnSelectedContext(
+			func(clusterInfo *cluster.Info, namespace string, status reporter.Interface) error {
+				if err := deploy.Broker(&deployflags, clusterInfo.ClientProducer, status); err != nil {
+					return err // nolint:wrapcheck // No need to wrap errors here.
+				}
 
-		config, err := deployRestConfigProducer.ForCluster()
-		exit.OnError(status.Error(err, "Error creating REST config"))
-
-		clientProducer, err := client.NewProducerFromRestConfig(config.Config)
-		exit.OnError(status.Error(err, "Error creating client producer"))
-
-		err = deploy.Broker(&deployflags, clientProducer, status)
-		exit.OnError(err)
-
-		err = broker.WriteInfoToFile(config.Config, deployflags.BrokerNamespace, ipsecSubmFile,
-			stringset.New(deployflags.BrokerSpec.Components...), deployflags.BrokerSpec.DefaultCustomDomains, status)
-		exit.OnError(err)
+				return broker.WriteInfoToFile( // nolint:wrapcheck // No need to wrap errors here.
+					clusterInfo.RestConfig, deployflags.BrokerNamespace, ipsecSubmFile,
+					stringset.New(deployflags.BrokerSpec.Components...), deployflags.BrokerSpec.DefaultCustomDomains, status)
+			}, cli.NewReporter()))
 	},
 }
 
 func init() {
 	addDeployBrokerFlags()
-	deployRestConfigProducer.AddKubeContextFlag(deployBroker)
+	deployRestConfigProducer.SetupFlags(deployBroker.Flags())
 	rootCmd.AddCommand(deployBroker)
 }
 
