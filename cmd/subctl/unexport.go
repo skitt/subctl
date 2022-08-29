@@ -24,16 +24,13 @@ import (
 	"github.com/submariner-io/subctl/internal/cli"
 	"github.com/submariner-io/subctl/internal/exit"
 	"github.com/submariner-io/subctl/internal/restconfig"
+	"github.com/submariner-io/subctl/pkg/cluster"
 	"github.com/submariner-io/subctl/pkg/service"
 	mcsclient "sigs.k8s.io/mcs-api/pkg/client/clientset/versioned/typed/apis/v1alpha1"
 )
 
 var (
-	unexportOptions struct {
-		namespace string
-	}
-
-	unexportRestConfigProducer = restconfig.NewProducer()
+	unexportRestConfigProducer = restconfig.NewProducer().WithNamespace()
 
 	unexportCmd = &cobra.Command{
 		Use:   "unexport",
@@ -52,28 +49,19 @@ var (
 
 			status := cli.NewReporter()
 
-			config, err := unexportRestConfigProducer.ForCluster()
-			exit.OnError(status.Error(err, "Error creating REST config"))
+			exit.OnError(unexportRestConfigProducer.RunOnSelectedContext(
+				func(clusterInfo *cluster.Info, namespace string) error {
+					mcsClient, err := mcsclient.NewForConfig(clusterInfo.RestConfig)
+					exit.OnError(status.Error(err, "Error creating client"))
 
-			clientConfig := unexportRestConfigProducer.ClientConfig()
-			if unexportOptions.namespace == "" {
-				if unexportOptions.namespace, _, err = clientConfig.Namespace(); err != nil {
-					unexportOptions.namespace = "default"
-				}
-			}
-
-			client, err := mcsclient.NewForConfig(config.Config)
-			exit.OnError(status.Error(err, "Error creating client"))
-
-			err = service.Unexport(client, unexportOptions.namespace, args[0], status)
-			exit.OnError(err)
+					return service.Unexport(mcsClient, namespace, args[0], status) // nolint:wrapcheck // No need to wrap errors here.
+				}, status))
 		},
 	}
 )
 
 func init() {
-	unexportRestConfigProducer.AddKubeContextFlag(unexportCmd)
-	unexportServiceCmd.Flags().StringVarP(&unexportOptions.namespace, "namespace", "n", "", "namespace of the service to be unexported")
+	unexportRestConfigProducer.SetupFlags(unexportCmd.Flags())
 	unexportCmd.AddCommand(unexportServiceCmd)
 	rootCmd.AddCommand(unexportCmd)
 }
