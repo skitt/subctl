@@ -42,8 +42,6 @@ import (
 	subv1 "github.com/submariner-io/submariner/pkg/apis/submariner.io/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/clientcmd/api"
@@ -51,7 +49,7 @@ import (
 	mcsv1a1 "sigs.k8s.io/mcs-api/pkg/apis/v1alpha1"
 )
 
-type RestConfig struct {
+type restConfig struct {
 	Config      *rest.Config
 	ClusterName string
 }
@@ -176,12 +174,6 @@ func (rcp *Producer) AddKubeConfigFlag(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&rcp.kubeConfig, "kubeconfig", "", "absolute path(s) to the kubeconfig file(s)")
 }
 
-// AddKubeContextFlag adds a "kubeconfig" flag and a single "kubecontext" flag that can be used once and only once.
-func (rcp *Producer) AddKubeContextFlag(cmd *cobra.Command) {
-	rcp.AddKubeConfigFlag(cmd)
-	cmd.PersistentFlags().StringVar(&rcp.kubeContext, "kubecontext", "", "kubeconfig context to use")
-}
-
 // AddKubeContextMultiFlag adds a "kubeconfig" flag and a "kubecontext" flag that can be specified multiple times (or comma separated).
 func (rcp *Producer) AddKubeContextMultiFlag(cmd *cobra.Command, usage string) {
 	rcp.AddKubeConfigFlag(cmd)
@@ -206,8 +198,8 @@ func (rcp *Producer) PopulateTestFramework() {
 	}
 }
 
-func (rcp *Producer) MustGetForClusters() []RestConfig {
-	configs, err := rcp.ForClusters()
+func (rcp *Producer) MustGetForClusters() []restConfig {
+	configs, err := rcp.getRestConfigs()
 	exit.OnErrorWithMessage(err, "Error getting REST Config for cluster")
 
 	return configs
@@ -227,8 +219,8 @@ func (rcp *Producer) CountRequestedClusters() int {
 	return 1
 }
 
-func (rcp *Producer) ForCluster() (RestConfig, error) {
-	var restConfig RestConfig
+func (rcp *Producer) ForCluster() (restConfig, error) {
+	var restConfig restConfig
 
 	restConfigs, err := rcp.getRestConfigs()
 	if err != nil {
@@ -242,24 +234,20 @@ func (rcp *Producer) ForCluster() (RestConfig, error) {
 	return restConfig, errors.New("error getting restconfig")
 }
 
-func (rcp *Producer) ForClusters() ([]RestConfig, error) {
-	return rcp.getRestConfigs()
-}
-
-func (rcp *Producer) getRestConfigs() ([]RestConfig, error) {
+func (rcp *Producer) getRestConfigs() ([]restConfig, error) {
 	if rcp.inCluster {
-		restConfig, err := rest.InClusterConfig()
+		inClusterConfig, err := rest.InClusterConfig()
 		if err != nil {
-			return []RestConfig{}, errors.Wrap(err, "error retrieving the in-cluster configuration")
+			return []restConfig{}, errors.Wrap(err, "error retrieving the in-cluster configuration")
 		}
 
-		return []RestConfig{{
-			Config:      restConfig,
+		return []restConfig{{
+			Config:      inClusterConfig,
 			ClusterName: "in-cluster",
 		}}, nil
 	}
 
-	var restConfigs []RestConfig
+	var restConfigs []restConfig
 
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	rules.DefaultClientConfig = &clientcmd.DefaultClientConfig
@@ -330,48 +318,34 @@ func ForBroker(submariner *v1alpha1.Submariner, serviceDisc *v1alpha1.ServiceDis
 	return restConfig, namespace, errors.Wrap(err, "error getting auth rest config")
 }
 
-func clientConfigAndClusterName(rules *clientcmd.ClientConfigLoadingRules, overrides *clientcmd.ConfigOverrides) (RestConfig, error) {
+func clientConfigAndClusterName(rules *clientcmd.ClientConfigLoadingRules, overrides *clientcmd.ConfigOverrides) (restConfig, error) {
 	config := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides)
 
 	return getRestConfigFromConfig(config, overrides)
 }
 
-func getRestConfigFromConfig(config clientcmd.ClientConfig, overrides *clientcmd.ConfigOverrides) (RestConfig, error) {
+func getRestConfigFromConfig(config clientcmd.ClientConfig, overrides *clientcmd.ConfigOverrides) (restConfig, error) {
 	clientConfig, err := config.ClientConfig()
 	if err != nil {
-		return RestConfig{}, errors.Wrap(err, "error creating client config")
+		return restConfig{}, errors.Wrap(err, "error creating client config")
 	}
 
 	raw, err := config.RawConfig()
 	if err != nil {
-		return RestConfig{}, errors.Wrap(err, "error creating rest config")
+		return restConfig{}, errors.Wrap(err, "error creating rest config")
 	}
 
 	clusterName := clusterNameFromContext(&raw, overrides.CurrentContext)
 
 	if clusterName == nil {
-		return RestConfig{}, fmt.Errorf("could not obtain the cluster name from kube config: %#v", raw)
+		return restConfig{}, fmt.Errorf("could not obtain the cluster name from kube config: %#v", raw)
 	}
 
-	return RestConfig{Config: clientConfig, ClusterName: *clusterName}, nil
+	return restConfig{Config: clientConfig, ClusterName: *clusterName}, nil
 }
 
-func Clients(config *rest.Config) (dynamic.Interface, kubernetes.Interface, error) {
-	dynClient, err := dynamic.NewForConfig(config)
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "error creating client")
-	}
-
-	clientSet, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "error creating client")
-	}
-
-	return dynClient, clientSet, nil
-}
-
-func (rcp *Producer) ClusterNameFromContext() (*string, error) {
-	rawConfig, err := rcp.ClientConfig().RawConfig()
+func (rcp *Producer) clusterNameFromContext() (*string, error) {
+	rawConfig, err := rcp.clientConfig().RawConfig()
 	if err != nil {
 		return nil, errors.Wrap(err, "error retrieving raw client configuration")
 	}
@@ -393,21 +367,8 @@ func clusterNameFromContext(rawConfig *api.Config, overridesContext string) *str
 	return &configContext.Cluster
 }
 
-func (rcp *Producer) GetClusterID() (string, error) {
-	clusterName, err := rcp.ClusterNameFromContext()
-	if err != nil {
-		return "", err
-	}
-
-	if clusterName != nil {
-		return *clusterName, nil
-	}
-
-	return "", nil
-}
-
 // ClientConfig returns a clientcmd.ClientConfig to use when communicating with K8s.
-func (rcp *Producer) ClientConfig() clientcmd.ClientConfig {
+func (rcp *Producer) clientConfig() clientcmd.ClientConfig {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	rules.ExplicitPath = rcp.kubeConfig
 
@@ -475,7 +436,7 @@ func ConfigureTestFramework(args []string) error {
 	for _, config := range args {
 		rcp := NewProducerFrom(config, "")
 
-		clusterName, err := rcp.ClusterNameFromContext()
+		clusterName, err := rcp.clusterNameFromContext()
 		if err != nil {
 			// nolint:nilerr // This is intentional.
 			return nil
