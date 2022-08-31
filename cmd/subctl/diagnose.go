@@ -35,7 +35,8 @@ var (
 		podNamespace string
 	}
 
-	diagnoseRestConfigProducer = restconfig.NewProducer()
+	diagnoseRestConfigProducer            = restconfig.NewProducer().WithDefaultNamespace(constants.OperatorNamespace)
+	diagnoseLocalRemoteRestConfigProducer = restconfig.NewProducer().WithDefaultNamespace(constants.OperatorNamespace).WithPrefixedContext("remote")
 
 	diagnoseCmd = &cobra.Command{
 		Use:   "diagnose",
@@ -119,28 +120,58 @@ var (
 	}
 
 	diagnoseFirewallTunnelCmd = &cobra.Command{
-		Use:   "inter-cluster <localkubeconfig> <remotekubeconfig>",
+		Use:   "inter-cluster --context <localcontext> --remotecontext <remotecontext>",
 		Short: "Check firewall access to setup tunnels between the Gateway node",
 		Long:  "This command checks if the firewall configuration allows tunnels to be configured on the Gateway nodes.",
-		Args:  checkKubeconfigArgs,
 		Run: func(command *cobra.Command, args []string) {
-			err := diagnose.TunnelConfigAcrossClusters(
-				clusterInfoFromKubeConfig(args[0]), clusterInfoFromKubeConfig(args[1]),
-				diagnoseFirewallOptions, cli.NewReporter())
-			exit.OnError(err)
+			status := cli.NewReporter()
+
+			if len(args) == 2 {
+				status.Warning("The two-argument form of inter-cluster is deprecated, see the documentation for details")
+
+				localProducer := restconfig.NewProducerFrom(args[0], "")
+				remoteProducer := restconfig.NewProducerFrom(args[1], "")
+
+				exit.OnError(localProducer.RunOnSelectedContext(
+					func(localClusterInfo *cluster.Info, localNamespace string) error {
+						return remoteProducer.RunOnSelectedContext( // nolint:wrapcheck // No need to wrap errors here.
+							func(remoteClusterInfo *cluster.Info, remoteNamespace string) error {
+								return diagnose.TunnelConfigAcrossClusters( // nolint:wrapcheck // No need to wrap errors here.
+									localClusterInfo, remoteClusterInfo, diagnoseFirewallOptions, status)
+							}, status)
+					}, status))
+			} else {
+				exit.OnError(diagnoseRestConfigProducer.RunOnSelectedContext(
+					func(localClusterInfo *cluster.Info, localNamespace string) error {
+						return diagnoseRestConfigProducer.RunOnSelectedPrefixedContext( // nolint:wrapcheck // No need to wrap errors here.
+							"remote",
+							func(remoteClusterInfo *cluster.Info, remoteNamespace string) error {
+								return diagnose.TunnelConfigAcrossClusters( // nolint:wrapcheck // No need to wrap errors here.
+									localClusterInfo, remoteClusterInfo, diagnoseFirewallOptions, status)
+							}, status)
+					}, status))
+			}
 		},
 	}
 
 	diagnoseFirewallNatDiscovery = &cobra.Command{
-		Use:   "nat-discovery <localkubeconfig> <remotekubeconfig>",
+		Use:   "nat-discovery --context <localcontext> --remotecontext <remotecontext>",
 		Short: "Check firewall access for nat-discovery to function properly",
 		Long:  "This command checks if the firewall configuration allows nat-discovery between the configured Gateway nodes.",
 		Args:  checkKubeconfigArgs,
 		Run: func(command *cobra.Command, args []string) {
-			err := diagnose.NatDiscoveryConfigAcrossClusters(
-				clusterInfoFromKubeConfig(args[0]), clusterInfoFromKubeConfig(args[1]),
-				diagnoseFirewallOptions, cli.NewReporter())
-			exit.OnError(err)
+			localProducer := restconfig.NewProducerFrom(args[0], "")
+			remoteProducer := restconfig.NewProducerFrom(args[1], "")
+			status := cli.NewReporter()
+
+			exit.OnError(localProducer.RunOnSelectedContext(
+				func(localClusterInfo *cluster.Info, localNamespace string) error {
+					return remoteProducer.RunOnSelectedContext( // nolint:wrapcheck // No need to wrap errors here.
+						func(remoteClusterInfo *cluster.Info, remoteNamespace string) error {
+							return diagnose.NatDiscoveryConfigAcrossClusters( // nolint:wrapcheck // No need to wrap errors here.
+								localClusterInfo, remoteClusterInfo, diagnoseFirewallOptions, status)
+						}, status)
+				}, status))
 		},
 	}
 
@@ -164,7 +195,6 @@ func init() {
 }
 
 func addDiagnoseSubCommands() {
-	addDiagnosePodNamespaceFlag(diagnoseKubeProxyModeCmd, &diagnoseKubeProxyOptions.podNamespace)
 	addDiagnoseFWConfigFlags(diagnoseAllCmd)
 
 	diagnoseCmd.AddCommand(diagnoseCNICmd)
@@ -179,6 +209,7 @@ func addDiagnoseSubCommands() {
 func addDiagnoseFirewallSubCommands() {
 	addDiagnoseFWConfigFlags(diagnoseFirewallMetricsCmd)
 	addDiagnoseFWConfigFlags(diagnoseFirewallVxLANCmd)
+	diagnoseLocalRemoteRestConfigProducer.SetupFlags(diagnoseFirewallTunnelCmd.Flags())
 	addDiagnoseFWConfigFlags(diagnoseFirewallTunnelCmd)
 	addDiagnoseFWConfigFlags(diagnoseFirewallNatDiscovery)
 
@@ -188,16 +219,11 @@ func addDiagnoseFirewallSubCommands() {
 	diagnoseFirewallCmd.AddCommand(diagnoseFirewallNatDiscovery)
 }
 
-func addDiagnosePodNamespaceFlag(command *cobra.Command, value *string) {
-	command.Flags().StringVar(value, "namespace", constants.OperatorNamespace, "namespace in which validation pods should be deployed")
-}
-
 func addDiagnoseFWConfigFlags(command *cobra.Command) {
 	command.Flags().UintVar(&diagnoseFirewallOptions.ValidationTimeout, "validation-timeout", 90,
 		"time to run in seconds while validating the firewall")
 	command.Flags().BoolVar(&diagnoseFirewallOptions.VerboseOutput, "verbose", false,
 		"produce verbose output while validating the firewall")
-	addDiagnosePodNamespaceFlag(command, &diagnoseFirewallOptions.PodNamespace)
 }
 
 func checkKubeconfigArgs(_ *cobra.Command, args []string) error {
@@ -215,23 +241,6 @@ func checkKubeconfigArgs(_ *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-func clusterInfoFromKubeConfig(kubeConfig string) *cluster.Info {
-	producer := restconfig.NewProducerFrom(kubeConfig, "")
-	config, err := producer.ForCluster()
-	exit.OnErrorWithMessage(err, fmt.Sprintf("The provided kubeconfig %q is invalid", kubeConfig))
-
-	clusterInfo, err := cluster.NewInfo("", config.Config)
-	exit.OnErrorWithMessage(err, fmt.Sprintf("Error initializing cluster information for kubeconfig %q", kubeConfig))
-
-	if clusterInfo.Submariner == nil {
-		exit.WithMessage(constants.SubmarinerNotInstalled)
-	}
-
-	clusterInfo.Name = clusterInfo.Submariner.Spec.ClusterID
-
-	return clusterInfo
 }
 
 func diagnoseAll(clusterInfo *cluster.Info, status reporter.Interface) bool {
