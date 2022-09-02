@@ -255,6 +255,47 @@ func (rcp *Producer) RunOnSelectedPrefixedContext(prefix string, function PerCon
 	return nil
 }
 
+// RunOnAllContexts runs the given function on all accessible non-prefixed contexts.
+func (rcp *Producer) RunOnAllContexts(function PerContextFn, status reporter.Interface) error {
+	if rcp.inCluster {
+		restConfig, err := rest.InClusterConfig()
+		if err != nil {
+			return status.Error(err, "error retrieving the in-cluster configuration")
+		}
+
+		// In-cluster configurations don't give a cluster name, use "in-cluster"
+		clusterInfo, err := cluster.NewInfo("in-cluster", restConfig)
+		if err != nil {
+			return status.Error(err, "error building the cluster.Info for the in-cluster configuration")
+		}
+
+		// In-cluster configurations don't specify a namespace, use the default
+		// When using the in-cluster configuration, that's the only configuration we want
+		return function(clusterInfo, "default", status)
+	}
+
+	// TODO Check whether a context has been overridden (--context=foo on the command line)
+	if rcp.defaultClientConfig != nil {
+		rawConfig, err := rcp.defaultClientConfig.config.RawConfig()
+		if err != nil {
+			return status.Error(err, "error retrieving the raw kubeconfig setup")
+		}
+
+		for contextName, context := range rawConfig.Contexts {
+			fmt.Printf("Cluster %q\n", context.Cluster)
+
+			rcp.defaultClientConfig.overrides.CurrentContext = contextName
+			if err := rcp.RunOnSelectedContext(function, status); err != nil {
+				return err
+			}
+
+			fmt.Println()
+		}
+	}
+
+	return nil
+}
+
 func (rcp *Producer) AddKubeConfigFlag(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&rcp.kubeConfig, "kubeconfig", "", "absolute path(s) to the kubeconfig file(s)")
 }
@@ -516,4 +557,28 @@ func ConfigureTestFramework(args []string) error {
 	}
 
 	return nil
+}
+
+func IfSubmarinerInstalled(run PerContextFn) PerContextFn {
+	return func(clusterInfo *cluster.Info, namespace string, status reporter.Interface) error {
+		if clusterInfo.Submariner == nil {
+			status.Warning(constants.SubmarinerNotInstalled)
+
+			return nil
+		}
+
+		return run(clusterInfo, namespace, status)
+	}
+}
+
+func IfServiceDiscoveryInstalled(run PerContextFn) PerContextFn {
+	return func(clusterInfo *cluster.Info, namespace string, status reporter.Interface) error {
+		if clusterInfo.ServiceDiscovery == nil {
+			status.Warning(constants.ServiceDiscoveryNotInstalled)
+
+			return nil
+		}
+
+		return run(clusterInfo, namespace, status)
+	}
 }
