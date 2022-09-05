@@ -60,16 +60,17 @@ type configAndOverrides struct {
 }
 
 type Producer struct {
-	kubeConfig            string
-	kubeContext           string
-	contexts              []string
-	contextPrefixes       []string
-	defaultClientConfig   *configAndOverrides
-	prefixedClientConfigs map[string]*configAndOverrides
-	inCluster             bool
-	namespaceFlag         bool
-	contextsFlag          bool
-	defaultNamespace      *string
+	kubeConfig                    string
+	kubeContext                   string
+	contexts                      []string
+	contextPrefixes               []string
+	defaultClientConfig           *configAndOverrides
+	prefixedClientConfigs         map[string]*configAndOverrides
+	inCluster                     bool
+	namespaceFlag                 bool
+	contextsFlag                  bool
+	deprecatedKubeContextsMessage *string
+	defaultNamespace              *string
 }
 
 // NewProducer initialises a blank producer which needs to be set up with flags (see SetupFlags).
@@ -120,6 +121,12 @@ func (rcp *Producer) WithContextsFlag() *Producer {
 	return rcp
 }
 
+func (rcp *Producer) WithDeprecatedKubeContexts(message string) *Producer {
+	rcp.deprecatedKubeContextsMessage = &message
+
+	return rcp
+}
+
 // SetupFlags configures the given flags to control the producer settings.
 func (rcp *Producer) SetupFlags(flags *pflag.FlagSet) {
 	// The base loading rules are shared across all clientcmd setups.
@@ -145,9 +152,12 @@ func (rcp *Producer) SetupFlags(flags *pflag.FlagSet) {
 	// Multiple contexts (only on the default prefix)
 	if rcp.contextsFlag {
 		flags.StringSliceVar(&rcp.contexts, "contexts", nil, "comma-separated list of contexts to use")
+	}
+
+	if rcp.deprecatedKubeContextsMessage != nil {
 		// Support deprecated --kubecontexts; TODO remove in 0.15
 		flags.StringSliceVar(&rcp.contexts, "kubecontexts", nil, "comma-separated list of contexts to use")
-		_ = flags.MarkDeprecated("kubecontexts", "use --contexts instead")
+		_ = flags.MarkDeprecated("kubecontexts", *rcp.deprecatedKubeContextsMessage)
 	}
 
 	// Other prefixes

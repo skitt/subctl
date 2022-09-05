@@ -34,7 +34,8 @@ var (
 	intraCluster bool
 	verbose      bool
 
-	benchmarkRestConfigProducer = restconfig.NewProducer()
+	benchmarkRestConfigProducer = restconfig.NewProducer().
+					WithDeprecatedKubeContexts("use --context and --remotecontext instead").WithPrefixedContext("remote")
 
 	benchmarkCmd = &cobra.Command{
 		Use:   "benchmark",
@@ -42,7 +43,7 @@ var (
 		Long:  "This command runs various benchmark tests",
 	}
 	benchmarkThroughputCmd = &cobra.Command{
-		Use:   "throughput --kubecontexts <kubeContext1>[,<kubeContext2>]",
+		Use:   "throughput --context <kubeContext1> [--remotecontext <kubeContext2>]",
 		Short: "Benchmark throughput",
 		Long:  "This command runs throughput tests within a cluster or between two clusters",
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -55,7 +56,7 @@ var (
 		},
 	}
 	benchmarkLatencyCmd = &cobra.Command{
-		Use:   "latency --kubecontexts <kubeContext1>[,<kubeContext2>]",
+		Use:   "latency --context <kubeContext1> [--remotecontext <kubeContext2>]",
 		Short: "Benchmark latency",
 		Long:  "This command runs latency benchmark tests within a cluster or between two clusters",
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -81,8 +82,13 @@ func init() {
 }
 
 func addBenchmarkFlags(cmd *cobra.Command) {
-	benchmarkRestConfigProducer.AddKubeContextMultiFlag(cmd, "comma-separated list of one or two kubeconfig contexts to use.")
+	benchmarkRestConfigProducer.SetupFlags(cmd.PersistentFlags())
+
+	// TODO Remove in 0.15
 	cmd.PersistentFlags().BoolVar(&intraCluster, "intra-cluster", false, "run the test within a single cluster")
+	_ = cmd.PersistentFlags().MarkDeprecated("intra-cluster",
+		"specify a single context for intra-cluster benchmarks, two contexts for inter-cluster benchmarks")
+
 	cmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "produce verbose logs during benchmark tests")
 }
 
