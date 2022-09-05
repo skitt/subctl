@@ -296,13 +296,13 @@ func (rcp *Producer) RunOnAllContexts(function PerContextFn, status reporter.Int
 	return nil
 }
 
-func (rcp *Producer) AddKubeConfigFlag(cmd *cobra.Command) {
+func (rcp *Producer) addKubeConfigFlag(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&rcp.kubeConfig, "kubeconfig", "", "absolute path(s) to the kubeconfig file(s)")
 }
 
 // AddKubeContextMultiFlag adds a "kubeconfig" flag and a "kubecontext" flag that can be specified multiple times (or comma separated).
 func (rcp *Producer) AddKubeContextMultiFlag(cmd *cobra.Command, usage string) {
-	rcp.AddKubeConfigFlag(cmd)
+	rcp.addKubeConfigFlag(cmd)
 
 	if usage == "" {
 		usage = "comma-separated list of kubeconfig contexts to use, can be specified multiple times.\n" +
