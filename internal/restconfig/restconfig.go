@@ -225,6 +225,8 @@ func (rcp *Producer) setupFromConfig(kubeConfig, kubeContext string) {
 	}
 }
 
+type AllContextFn func(clusterInfos []*cluster.Info, namespaces []string, status reporter.Interface) error
+
 type PerContextFn func(clusterInfo *cluster.Info, namespace string, status reporter.Interface) error
 
 // RunOnSelectedContext runs the given function on the selected context.
@@ -280,6 +282,16 @@ func runInCluster(function PerContextFn, status reporter.Interface) error {
 	return function(clusterInfo, "default", status)
 }
 
+// HasSelectedPrefixContext determines whether the user has specified a context with the given prefix.
+func (rcp *Producer) HasSelectedPrefixedContext(prefix string) bool {
+	clientConfig, ok := rcp.prefixedClientConfigs[prefix]
+	if !ok {
+		return false
+	}
+
+	return clientConfig.overrides.CurrentContext != ""
+}
+
 // RunOnSelectedContext runs the given function on the selected prefixed context.
 func (rcp *Producer) RunOnSelectedPrefixedContext(prefix string, function PerContextFn, status reporter.Interface) error {
 	clientConfig, ok := rcp.prefixedClientConfigs[prefix]
@@ -314,6 +326,69 @@ func (rcp *Producer) RunOnSelectedPrefixedContext(prefix string, function PerCon
 		}
 
 		return function(clusterInfo, namespace, status)
+	}
+
+	return nil
+}
+
+// CountSelectedContexts returns the number of selected contexts (excluding prefixed contexts).
+func (rcp *Producer) CountSelectedContexts() int {
+	if rcp.inCluster {
+		return 1
+	}
+
+	if rcp.defaultClientConfig != nil && len(rcp.contexts) > 0 {
+		return len(rcp.contexts)
+	}
+
+	return 0
+}
+
+// RunOnSelectedContexts runs the given function on all selected contexts, passing them simultaneously.
+func (rcp *Producer) RunOnSelectedContexts(function AllContextFn, status reporter.Interface) error {
+	if rcp.inCluster {
+		return runInCluster(func(clusterInfo *cluster.Info, namespace string, status reporter.Interface) error {
+			return function([]*cluster.Info{clusterInfo}, []string{namespace}, status)
+		}, status)
+	}
+
+	if rcp.defaultClientConfig != nil {
+		if len(rcp.contexts) > 0 {
+			// Loop over explicitly-chosen contexts
+			clusterInfos := []*cluster.Info{}
+			namespaces := []string{}
+
+			for _, contextName := range rcp.contexts {
+				rcp.defaultClientConfig.overrides.CurrentContext = contextName
+				clientConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+					rcp.defaultClientConfig.loadingRules, rcp.defaultClientConfig.overrides)
+
+				restConfig, err := getRestConfigFromConfig(clientConfig, rcp.defaultClientConfig.overrides)
+				if err != nil {
+					return status.Error(err, "error retrieving the default configuration")
+				}
+
+				clusterInfo, err := cluster.NewInfo(restConfig.ClusterName, restConfig.Config)
+				if err != nil {
+					return status.Error(err, "error building the cluster.Info for the default configuration")
+				}
+
+				clusterInfos = append(clusterInfos, clusterInfo)
+
+				namespace, overridden, err := clientConfig.Namespace()
+				if err != nil {
+					return status.Error(err, "error retrieving the namespace for the default configuration")
+				}
+
+				if !overridden && rcp.defaultNamespace != nil {
+					namespace = *rcp.defaultNamespace
+				}
+
+				namespaces = append(namespaces, namespace)
+			}
+
+			return function(clusterInfos, namespaces, status)
+		}
 	}
 
 	return nil
