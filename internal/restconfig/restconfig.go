@@ -62,12 +62,13 @@ type configAndOverrides struct {
 type Producer struct {
 	kubeConfig            string
 	kubeContext           string
-	kubeContexts          []string
+	contexts              []string
 	contextPrefixes       []string
 	defaultClientConfig   *configAndOverrides
 	prefixedClientConfigs map[string]*configAndOverrides
 	inCluster             bool
 	namespaceFlag         bool
+	contextsFlag          bool
 	defaultNamespace      *string
 }
 
@@ -111,6 +112,14 @@ func (rcp *Producer) WithPrefixedContext(prefix string) *Producer {
 	return rcp
 }
 
+// WithContextsFlag configures the producer to allow multiple contexts to be selected with the --contexts flag.
+// This is only usable with RunOnAllContexts and will act as a filter on the selected contexts.
+func (rcp *Producer) WithContextsFlag() *Producer {
+	rcp.contextsFlag = true
+
+	return rcp
+}
+
 // SetupFlags configures the given flags to control the producer settings.
 func (rcp *Producer) SetupFlags(flags *pflag.FlagSet) {
 	// The base loading rules are shared across all clientcmd setups.
@@ -132,6 +141,14 @@ func (rcp *Producer) SetupFlags(flags *pflag.FlagSet) {
 	legacyFlags := clientcmd.RecommendedConfigOverrideFlags("kube")
 	legacyFlags.CurrentContext.BindStringFlag(flags, &rcp.defaultClientConfig.overrides.CurrentContext)
 	_ = flags.MarkDeprecated("kubecontext", "use --context instead")
+
+	// Multiple contexts (only on the default prefix)
+	if rcp.contextsFlag {
+		flags.StringSliceVar(&rcp.contexts, "contexts", nil, "comma-separated list of contexts to use")
+		// Support deprecated --kubecontexts; TODO remove in 0.15
+		flags.StringSliceVar(&rcp.contexts, "kubecontexts", nil, "comma-separated list of contexts to use")
+		_ = flags.MarkDeprecated("kubecontexts", "use --contexts instead")
+	}
 
 	// Other prefixes
 	rcp.prefixedClientConfigs = make(map[string]*configAndOverrides, len(rcp.contextPrefixes))
@@ -281,17 +298,41 @@ func (rcp *Producer) RunOnAllContexts(function PerContextFn, status reporter.Int
 			return status.Error(err, "error retrieving the raw kubeconfig setup")
 		}
 
-		for contextName, context := range rawConfig.Contexts {
-			fmt.Printf("Cluster %q\n", context.Cluster)
+		if rcp.contextsFlag && len(rcp.contexts) > 0 {
+			// Loop over explicitly-chosen contexts
+			for _, contextName := range rcp.contexts {
+				chosenContext, ok := rawConfig.Contexts[contextName]
+				if !ok {
+					// TODO Exit on first error?
+					return status.Error(errors.New("no such context"), "error retrieving context %s", contextName)
+				}
 
-			rcp.defaultClientConfig.overrides.CurrentContext = contextName
-			if err := rcp.RunOnSelectedContext(function, status); err != nil {
-				return err
+				if err := rcp.overrideContextAndRun(chosenContext.Cluster, contextName, function, status); err != nil {
+					return err
+				}
 			}
-
-			fmt.Println()
+		} else {
+			// Loop over all accessible contexts
+			for contextName, context := range rawConfig.Contexts {
+				if err := rcp.overrideContextAndRun(context.Cluster, contextName, function, status); err != nil {
+					return err
+				}
+			}
 		}
 	}
+
+	return nil
+}
+
+func (rcp *Producer) overrideContextAndRun(clusterName, contextName string, function PerContextFn, status reporter.Interface) error {
+	fmt.Printf("Cluster %q\n", clusterName)
+
+	rcp.defaultClientConfig.overrides.CurrentContext = contextName
+	if err := rcp.RunOnSelectedContext(function, status); err != nil {
+		return err
+	}
+
+	fmt.Println()
 
 	return nil
 }
@@ -309,7 +350,7 @@ func (rcp *Producer) AddKubeContextMultiFlag(cmd *cobra.Command, usage string) {
 			"If none specified, all contexts referenced by the kubeconfig are used"
 	}
 
-	cmd.PersistentFlags().StringSliceVar(&rcp.kubeContexts, "kubecontexts", nil, usage)
+	cmd.PersistentFlags().StringSliceVar(&rcp.contexts, "kubecontexts", nil, usage)
 }
 
 // AddInClusterConfigFlag adds a flag enabling in-cluster configurations for processes running in pods.
@@ -318,84 +359,24 @@ func (rcp *Producer) AddInClusterConfigFlag(cmd *cobra.Command) {
 }
 
 func (rcp *Producer) PopulateTestFramework() {
-	framework.TestContext.KubeContexts = rcp.kubeContexts
+	framework.TestContext.KubeContexts = rcp.contexts
 	if rcp.kubeConfig != "" {
 		framework.TestContext.KubeConfig = rcp.kubeConfig
 	}
 }
 
-func (rcp *Producer) MustGetForClusters() []RestConfig {
-	configs, err := rcp.getRestConfigs()
-	exit.OnErrorWithMessage(err, "Error getting REST Config for cluster")
-
-	return configs
-}
-
 func (rcp *Producer) CountRequestedClusters() int {
-	if len(rcp.kubeContexts) > 0 {
+	if len(rcp.contexts) > 0 {
 		// Count unique contexts
 		contexts := stringset.New()
-		for i := range rcp.kubeContexts {
-			contexts.Add(rcp.kubeContexts[i])
+		for i := range rcp.contexts {
+			contexts.Add(rcp.contexts[i])
 		}
 
 		return contexts.Size()
 	}
 	// Current context or rcp.kubeContext
 	return 1
-}
-
-func (rcp *Producer) getRestConfigs() ([]RestConfig, error) {
-	if rcp.inCluster {
-		restConfig, err := rest.InClusterConfig()
-		if err != nil {
-			return []RestConfig{}, errors.Wrap(err, "error retrieving the in-cluster configuration")
-		}
-
-		return []RestConfig{{
-			Config:      restConfig,
-			ClusterName: "in-cluster",
-		}}, nil
-	}
-
-	var restConfigs []RestConfig
-
-	rules := clientcmd.NewDefaultClientConfigLoadingRules()
-	rules.DefaultClientConfig = &clientcmd.DefaultClientConfig
-	overrides := &clientcmd.ConfigOverrides{ClusterDefaults: clientcmd.ClusterDefaults}
-	rules.ExplicitPath = rcp.kubeConfig
-
-	contexts := []string{}
-	if len(rcp.kubeContexts) > 0 {
-		contexts = append(contexts, rcp.kubeContexts...)
-	} else if len(rcp.kubeContext) > 0 {
-		contexts = append(contexts, rcp.kubeContext)
-	} else {
-		kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides)
-		rawConfig, err := kubeConfig.RawConfig()
-		if err != nil {
-			return restConfigs, errors.Wrap(err, "error creating kube config")
-		}
-
-		for context := range rawConfig.Contexts {
-			contexts = append(contexts, context)
-		}
-	}
-
-	for _, context := range contexts {
-		if context != "" {
-			overrides.CurrentContext = context
-
-			config, err := clientConfigAndClusterName(rules, overrides)
-			if err != nil {
-				return nil, err
-			}
-
-			restConfigs = append(restConfigs, config)
-		}
-	}
-
-	return restConfigs, nil
 }
 
 func ForBroker(submariner *v1alpha1.Submariner, serviceDisc *v1alpha1.ServiceDiscovery) (*rest.Config, string, error) {
@@ -427,12 +408,6 @@ func ForBroker(submariner *v1alpha1.Submariner, serviceDisc *v1alpha1.ServiceDis
 	}
 
 	return restConfig, namespace, errors.Wrap(err, "error getting auth rest config")
-}
-
-func clientConfigAndClusterName(rules *clientcmd.ClientConfigLoadingRules, overrides *clientcmd.ConfigOverrides) (RestConfig, error) {
-	config := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, overrides)
-
-	return getRestConfigFromConfig(config, overrides)
 }
 
 func getRestConfigFromConfig(config clientcmd.ClientConfig, overrides *clientcmd.ConfigOverrides) (RestConfig, error) {
