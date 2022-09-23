@@ -454,22 +454,6 @@ func (rcp *Producer) overrideContextAndRun(clusterName, contextName string, func
 	return nil
 }
 
-func (rcp *Producer) addKubeConfigFlag(cmd *cobra.Command) {
-	cmd.PersistentFlags().StringVar(&rcp.kubeConfig, "kubeconfig", "", "absolute path(s) to the kubeconfig file(s)")
-}
-
-// AddKubeContextMultiFlag adds a "kubeconfig" flag and a "kubecontext" flag that can be specified multiple times (or comma separated).
-func (rcp *Producer) AddKubeContextMultiFlag(cmd *cobra.Command, usage string) {
-	rcp.addKubeConfigFlag(cmd)
-
-	if usage == "" {
-		usage = "comma-separated list of kubeconfig contexts to use, can be specified multiple times.\n" +
-			"If none specified, all contexts referenced by the kubeconfig are used"
-	}
-
-	cmd.PersistentFlags().StringSliceVar(&rcp.contexts, "kubecontexts", nil, usage)
-}
-
 func (rcp *Producer) PopulateTestFramework() {
 	framework.TestContext.KubeContexts = rcp.contexts
 	if rcp.kubeConfig != "" {

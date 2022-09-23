@@ -54,10 +54,11 @@ var (
 	disruptiveTests                 bool
 )
 
-var verifyRestConfigProducer = restconfig.NewProducer()
+var verifyRestConfigProducer = restconfig.NewProducer().
+	WithDeprecatedKubeContexts("use --context and --tocontext instead").WithPrefixedContext("to")
 
 var verifyCmd = &cobra.Command{
-	Use:   "verify --kubecontexts <kubeContext1>,<kubeContext2>",
+	Use:   "verify --context <kubeContext1> --tocontext <kubeContext2>",
 	Short: "Run verifications between two clusters",
 	Long: `This command performs various tests to verify that a Submariner deployment between two clusters
 is functioning properly. The verifications performed are controlled by the --only and --enable-disruptive
@@ -79,7 +80,7 @@ The following verifications are deemed disruptive:
 	Run: func(cmd *cobra.Command, args []string) {
 		testType := ""
 		if len(args) > 0 {
-			fmt.Println("subctl verify with kubeconfig arguments is deprecated, please use --kubecontexts instead")
+			fmt.Println("subctl verify with kubeconfig arguments is deprecated, please use --context and --tocontext instead")
 		}
 		err := setUpTestFramework(args, verifyRestConfigProducer, submarinerNamespace)
 		exit.OnErrorWithMessage(err, "error setting up test framework")
@@ -118,7 +119,7 @@ prompt for confirmation therefore you must specify --enable-disruptive to run th
 }
 
 func init() {
-	verifyRestConfigProducer.AddKubeContextMultiFlag(verifyCmd, "comma-separated list of exactly two kubeconfig contexts to use.")
+	verifyRestConfigProducer.SetupFlags(verifyCmd.Flags())
 	addVerifyFlags(verifyCmd)
 	rootCmd.AddCommand(verifyCmd)
 
