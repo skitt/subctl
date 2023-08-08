@@ -24,12 +24,9 @@ import (
 
 	"github.com/submariner-io/admiral/pkg/reporter"
 	"github.com/submariner-io/subctl/internal/component"
-	"github.com/submariner-io/subctl/internal/constants"
 	"github.com/submariner-io/subctl/pkg/broker"
 	"github.com/submariner-io/subctl/pkg/brokercr"
 	"github.com/submariner-io/subctl/pkg/client"
-	"github.com/submariner-io/subctl/pkg/image"
-	"github.com/submariner-io/subctl/pkg/operator"
 	operatorv1alpha1 "github.com/submariner-io/submariner-operator/api/v1alpha1"
 	"github.com/submariner-io/submariner-operator/pkg/crd"
 	"github.com/submariner-io/submariner-operator/pkg/discovery/globalnet"
@@ -63,7 +60,7 @@ func Broker(options *BrokerOptions, clientProducer client.Producer, status repor
 		return status.Error(err, "invalid GlobalCIDR configuration")
 	}
 
-	err := deploy(ctx, options, status, clientProducer)
+	err := Deploy(ctx, options, status, clientProducer)
 	if err != nil {
 		return err
 	}
@@ -82,7 +79,7 @@ func Broker(options *BrokerOptions, clientProducer client.Producer, status repor
 	return nil
 }
 
-func deploy(ctx context.Context, options *BrokerOptions, status reporter.Interface, clientProducer client.Producer) error {
+func Deploy(ctx context.Context, options *BrokerOptions, status reporter.Interface, clientProducer client.Producer) error {
 	status.Start("Setting up broker RBAC")
 	defer status.End()
 
@@ -92,11 +89,7 @@ func deploy(ctx context.Context, options *BrokerOptions, status reporter.Interfa
 		return status.Error(err, "error setting up broker RBAC")
 	}
 
-	status.Start("Deploying the Submariner operator")
-
-	repositoryInfo := image.NewRepositoryInfo(options.Repository, options.ImageVersion, nil)
-
-	err = operator.Ensure(ctx, status, clientProducer, constants.OperatorNamespace, repositoryInfo.GetOperatorImage(), options.OperatorDebug)
+	err = Operator(ctx, status, options.Repository, options.ImageVersion, nil, clientProducer, options.OperatorDebug)
 	if err != nil {
 		return status.Error(err, "error deploying Submariner operator")
 	}
