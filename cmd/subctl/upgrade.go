@@ -23,7 +23,9 @@ package subctl
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/coreos/go-semver/semver"
 	"github.com/spf13/cobra"
@@ -47,11 +49,7 @@ var (
 var upgradeCmd = &cobra.Command{
 	Use:   "upgrade",
 	Short: "Upgrades Submariner",
-	Run: func(cmd *cobra.Command, args []string) {
-		status := cli.NewReporter()
-		exit.OnError(upgradeSubctl(status))
-		exit.OnError(upgradeRestConfigProducer.RunOnAllContexts(upgradeSubmariner, status))
-	},
+	Run:   upgrade,
 }
 
 func init() {
@@ -60,10 +58,38 @@ func init() {
 	rootCmd.AddCommand(upgradeCmd)
 }
 
-func upgradeSubctl(status reporter.Interface) error {
+func upgrade(_ *cobra.Command, _ []string) {
+	status := cli.NewReporter()
+
+	// Step 1: upgrade subctl to match the requested version
+	command, err := upgradeSubctl(status)
+	exit.OnError(err)
+
+	if command != nil {
+		// Step 2a: subctl was upgraded, so run it instead of continuing
+		cmd := exec.Cmd{
+			Path:   *command,
+			Args:   os.Args[1:],
+			Stdin:  os.Stdin,
+			Stdout: os.Stdout,
+			Stderr: os.Stderr,
+		}
+		// exit.OnError outputs the version of subctl, which ends up being confusing here
+		if err := cmd.Run(); err != nil {
+			os.Exit(1)
+		}
+	} else {
+		// Step 2b: this subctl is already the requested version, run it
+		exit.OnError(upgradeRestConfigProducer.RunOnAllContexts(upgradeSubmariner, status))
+	}
+}
+
+// upgradeSubctl upgrades the local copy of subctl, if necessary.
+// Returns the path to the upgraded subctl if subctl was upgraded, nil if it wasn't.
+func upgradeSubctl(status reporter.Interface) (*string, error) {
 	if to == version.Version {
 		// Already running the right version
-		return nil
+		return nil, nil //nolint:nilnil // A nil command means subctl shouldn't be restarted.
 	}
 
 	// Default to downloading the latest version
@@ -76,7 +102,7 @@ func upgradeSubctl(status reporter.Interface) error {
 
 		toVersion, err := semver.NewVersion(to)
 		if toVersion == nil {
-			return status.Error(err, "Invalid target version")
+			return nil, status.Error(err, "Invalid target version")
 		}
 
 		// semver needs a dotted triplet, which is at least five characters;
@@ -84,30 +110,36 @@ func upgradeSubctl(status reporter.Interface) error {
 		if len(version.Version) >= 5 && version.Version[0:5] != "devel" {
 			currentVersion, err := semver.NewVersion(version.Version)
 			if currentVersion == nil {
-				return status.Error(err, "Error parsing current subctl version")
+				return nil, status.Error(err, "Error parsing current subctl version")
 			}
 
 			if toVersion.LessThan(*currentVersion) || toVersion.Equal(*currentVersion) {
-				return nil
+				return nil, nil //nolint:nilnil // A nil command means subctl shouldn't be restarted.
 			}
 		}
 
 		targetVersionString = "v" + toVersion.String()
 	}
 
-	status.Start(fmt.Sprintf("Upgrading subctl from %s to %s", version.Version, targetVersionString))
+	status.Start(fmt.Sprintf("Upgrading subctl from %s to %s, replacing %s", version.Version, targetVersionString, os.Args[0]))
 	defer status.End()
 
 	url := "https://get.submariner.io"
 
-	_, err := exec.Command("sh", "-c", "curl "+url+" | VERSION="+targetVersionString+" bash").CombinedOutput()
+	absolutePath, err := filepath.Abs(os.Args[0])
 	if err != nil {
-		return status.Error(err, "Error upgrading subctl")
+		return nil, status.Error(err, "Error determining the installation path")
+	}
+
+	_, err = exec.Command( //nolint:gosec // The user-controlled variables are sanitised above
+		"sh", "-c", "curl "+url+" | VERSION="+targetVersionString+" DESTDIR="+filepath.Dir(absolutePath)+" bash").CombinedOutput()
+	if err != nil {
+		return nil, status.Error(err, "Error upgrading subctl")
 	}
 
 	status.Success("Upgraded and installed subctl version: %s", to)
 
-	return nil
+	return &absolutePath, nil
 }
 
 func upgradeSubmariner(clusterInfo *cluster.Info, _ string, status reporter.Interface) error {
