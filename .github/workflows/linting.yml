@@ -36,32 +36,40 @@ jobs:
   gitlint:
     name: Commit Message(s)
     runs-on: ubuntu-latest
+    container: quay.io/submariner/shipyard-linting:devel
     steps:
       - name: Check out the repository
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
         with:
           fetch-depth: 0
+      - name: Mark the repository as safe
+        run: git config --global --add safe.directory $(pwd)
       - name: Run gitlint
-        run: make gitlint
+        run: make gitlint LOCAL_BUILD=1
 
   golangci-lint:
     name: Go
     runs-on: ubuntu-latest
+    container: quay.io/submariner/shipyard-dapper-base:devel
     steps:
       - name: Check out the repository
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+      - name: Mark the repository as safe
+        run: git config --global --add safe.directory $(pwd)
       - name: Run golangci-lint
-        run: make golangci-lint
+        run: make golangci-lint LOCAL_BUILD=1
 
   licenses:
     name: Dependency Licenses
     runs-on: ubuntu-latest
+    container: quay.io/submariner/shipyard-dapper-base:devel
     steps:
       - name: Check out the repository
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
-
+      - name: Mark the repository as safe
+        run: git config --global --add safe.directory $(pwd)
       - name: Check the licenses
-        run: make licensecheck
+        run: make licensecheck LOCAL_BUILD=1
 
   markdown-link-check:
     name: Markdown Links (modified files)
@@ -80,29 +88,38 @@ jobs:
   markdownlint:
     name: Markdown
     runs-on: ubuntu-latest
+    container: quay.io/submariner/shipyard-linting:devel
     steps:
       - name: Check out the repository
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+      - name: Mark the repository as safe
+        run: git config --global --add safe.directory $(pwd)
       - name: Run markdownlint
-        run: make markdownlint
+        run: make markdownlint LOCAL_BUILD=1
 
   packagedoc-lint:
     name: Package Documentation
     runs-on: ubuntu-latest
+    container: quay.io/submariner/shipyard-dapper-base:devel
     steps:
       - name: Check out the repository
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+      - name: Mark the repository as safe
+        run: git config --global --add safe.directory $(pwd)
       - name: Run packagedoc-lint
-        run: make packagedoc-lint
+        run: make packagedoc-lint LOCAL_BUILD=1
 
   shellcheck:
     name: Shell
     runs-on: ubuntu-latest
+    container: quay.io/submariner/shipyard-linting:devel
     steps:
       - name: Check out the repository
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+      - name: Mark the repository as safe
+        run: git config --global --add safe.directory $(pwd)
       - name: Run shellcheck
-        run: make shellcheck
+        run: make shellcheck LOCAL_BUILD=1
 
   vulnerability-scan:
     name: Vulnerability Scanning
@@ -129,8 +146,11 @@ jobs:
   yaml-lint:
     name: YAML
     runs-on: ubuntu-latest
+    container: quay.io/submariner/shipyard-linting:devel
     steps:
       - name: Check out the repository
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11
+      - name: Mark the repository as safe
+        run: git config --global --add safe.directory $(pwd)
       - name: Run yamllint
-        run: make yamllint
+        run: make yamllint LOCAL_BUILD=1
