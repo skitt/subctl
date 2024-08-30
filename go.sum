@@ -522,8 +522,8 @@ github.com/submariner-io/lighthouse v0.19.0-m2 h1:+/jL2wNqacyXILmyiv6Z+t5tV5i423
 github.com/submariner-io/lighthouse v0.19.0-m2/go.mod h1:z+fp6JaCOwNNt4U8GBSnkTT4FZxvOiKBBTmmWX48Jkk=
 github.com/submariner-io/shipyard v0.19.0-m2.0.20240828133900-3d3c2316f606 h1:0C59+84WEc0n8yuFCL4xNKmDhAZ5o/cGLiIzZy1It/s=
 github.com/submariner-io/shipyard v0.19.0-m2.0.20240828133900-3d3c2316f606/go.mod h1:Ith3HTqWhsEMmq26xw66OFYlGWO0p9Id86Cw0MIFbqQ=
-github.com/submariner-io/submariner v0.19.0-m2.0.20240827162549-34066931ccf3 h1:h4oUuOHAQ/hkpctzfIfMvJaKOFxIyr07dEaa8dlTSOc=
-github.com/submariner-io/submariner v0.19.0-m2.0.20240827162549-34066931ccf3/go.mod h1:jfM5OHgDmkWw/s9EOH0NeiqavOm2Yg24089+Vb8aKiI=
+github.com/submariner-io/submariner v0.19.0-m2.0.20240828171051-8bd453cc2f1e h1:lXKR8DVHBGD//7/jPJJPsfrmCpy6ew/kUJW9t4Dp3S4=
+github.com/submariner-io/submariner v0.19.0-m2.0.20240828171051-8bd453cc2f1e/go.mod h1:JrGqmuVNNjskq9oWE8I93MOAesGm/+fO95xEaF3bQ5Y=
 github.com/submariner-io/submariner-operator v0.19.0-m2 h1:HRrGfVtXFPR2km8evIPP6Xd/LbaVCfP6VcHwU5LSnWU=
 github.com/submariner-io/submariner-operator v0.19.0-m2/go.mod h1:3l6wo9iAddkUW3pApLEE5BofywlWfsUSAemkKLISyUA=
 github.com/tidwall/pretty v1.0.0/go.mod h1:XNkn88O1ChpSDQmQeStsy+sBenx6DDtFZJxhVysOjyk=
